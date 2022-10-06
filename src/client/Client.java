@@ -16,22 +16,65 @@ import org.json.JSONObject;
 import org.json.JSONArray;
 
 public class Client {
+	private String username;
 	private String access_token;
 	private String refresh_token;
+	private String request_id;
+	private String session_id;
+	private JSONObject balances;
 	private String url = "https://api.comdirect.de/api";
 	
-	public Client() {
-		
+	public Client(String username) {
+		this.username = username;
+	}
+
+	public Client(String username, String access_token, String refresh_token, String request_id, String session_id) {
+		this.username = username;
+		this.access_token = access_token;
+		this.refresh_token = refresh_token;
+		this.request_id = request_id;
+		this.session_id = session_id;
+		this.balances = null;
+	}
+
+	public String getUsername() {
+		return username;
+	}
+
+	public String getAccessToken() {
+		return access_token;
+	}
+
+	public String getRefreshToken() {
+		return refresh_token;
+	}
+
+	public String getRequestId() {
+		return request_id;
+	}
+
+	public String getSessionId() {
+		return session_id;
+	}
+	
+	public JSONObject getBalances() {
+			try {
+				setBalances();
+			} catch (Exception e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		return balances;
 	}
 
 	/**
-	 * 
+	 * Revokes all generated token.
 	 */
-	public void logout() {
+	public void revoke() {
 		
 		try {
 			HttpRequest httpRequest = HttpRequest.newBuilder()
-						.uri(new URI("https://api.comdirect.de/oauth/token"))
+						.uri(new URI("https://api.comdirect.de/oauth/revoke"))
 						.headers("Content-Type", "application/x-www-form-urlencoded", "Accept", "application/json", "Authorization", "Bearer %s".formatted(this.access_token))
 						.POST(BodyPublishers.ofString(""))
 						.build();
@@ -56,13 +99,14 @@ public class Client {
 
 
 	/**
+	 * Connects to the comdirect api. Generates all needed token and handles tan challenge.
 	 * @param client_id
 	 * @param client_secret
 	 * @param username
 	 * @param password
 	 * @throws Exception
 	 */
-	public void connect(String username, String password, String client_id, String client_secret) throws Exception {
+	public void connect(String password, String client_id, String client_secret) throws Exception {
 		
 		// POST https://api.comdirect.de/oauth/token
 		HttpRequest httpRequest = HttpRequest.newBuilder()
@@ -90,11 +134,11 @@ public class Client {
 		this.refresh_token = response.getString("refresh_token");
 		
 		// Generate session_id and request_id.
-		String session_id = UUID.randomUUID().toString();
+		this.session_id = UUID.randomUUID().toString();
 		
 		Timestamp timestamp = new Timestamp(System.currentTimeMillis());
 		
-		String request_id = Long.toString(timestamp.getTime());
+		this.request_id = Long.toString(timestamp.getTime());
 		request_id = request_id.substring(request_id.length() - 9);
 		
 		// GET URL-Präfix/session/clients/{clientId}/v1/sessions
@@ -138,7 +182,7 @@ public class Client {
 		response = new JSONObject(httpResponse.headers().allValues("x-once-authentication-info").get(0));
 		
 		// Wait until user confirms tan confirmation.
-		System.out.println("Please press enter after confirming tan.");
+		System.out.print(">>Please press enter after confirming tan.\n>");
 		Scanner scanner = new Scanner(System.in);
 		scanner.nextLine();
 		
@@ -178,15 +222,91 @@ public class Client {
 		
 		this.access_token = response.getString("access_token");
 		this.refresh_token = response.getString("refresh_token");
-		
-		
 
-		// Safe token to file.
-		TokenHandling.saveToPKCS12KeyStore("Land2070", username, "access_token",this.access_token);
-		TokenHandling.saveToPKCS12KeyStore("Land2070", username, "refresh_token", this.refresh_token);
 		
 	}
 
+	public void refresh(String password, String client_id, String client_secret) throws Exception {
+
+		// POST https://api.comdirect.de/oauth/token
+		HttpRequest httpRequest = HttpRequest.newBuilder()
+		.uri(new URI("https://api.comdirect.de/oauth/token"))
+		.headers("Content-Type", "application/x-www-form-urlencoded", "Accept", "application/json")
+		.POST(BodyPublishers.ofString(
+				"client_id=%s".formatted(client_id)
+				+ "&client_secret=%s".formatted(client_secret)
+				+ "&grant_type=refresh_token"
+				+ "&refresh_token=%s".formatted(refresh_token)))
+		.build();
+
+		HttpClient httpClient = HttpClient.newHttpClient();
+
+		HttpResponse<String> httpResponse =  httpClient.send(httpRequest, BodyHandlers.ofString());
+
+		// Check if request has failed.  
+		if(httpResponse.statusCode() != 200) 
+			throw new Exception("POST https://api.comdirect.de/oauth/token returned %s".formatted(httpResponse.statusCode()));
+
+		JSONObject response = new JSONObject(httpResponse.body());
+		this.access_token = response.getString("access_token");
+		this.refresh_token = response.getString("refresh_token");
+	}
+
+	/**
+	 * Requests the current balances and saves them.
+	 * @throws Exception Request failed beacause of invalid credentials.
+	 */
+	public void setBalances() throws Exception {
+		String authorization = "Bearer %s".formatted(access_token);	
+		String requestInfo = "{\"clientRequestId\":{\"sessionId\":\"%s\",\"requestId\":\"%s\"}}".formatted(session_id, request_id);
+
+		HttpRequest httpRequest = HttpRequest.newBuilder()
+				.uri(new URI(
+						"%s/banking/clients/user/v2/accounts/balances".formatted(url)
+						))
+				.headers(
+						"Accept", "application/json", "Authorization", authorization, "x-http-request-info", requestInfo, "Content-Type", "application/json"
+						)
+				.build();
+		
+		HttpClient httpClient = HttpClient.newHttpClient();
+		HttpResponse<String> httpResponse =  httpClient.send(httpRequest, BodyHandlers.ofString());
+		
+		if(httpResponse.statusCode() != 200)
+			throw new Exception("GET URL-Präfix/session/clients/{clientId}/v1/sessions returned %s".formatted(httpResponse.statusCode()));
+		
+		balances = new JSONObject(httpResponse.body());
+
+	}
+
+
+	public JSONObject getTransactions() throws Exception{
+		String authorization = "Bearer %s".formatted(access_token);	
+		String requestInfo = "{\"clientRequestId\":{\"sessionId\":\"%s\",\"requestId\":\"%s\"}}".formatted(session_id, request_id);
+
+		if(balances == null) {
+			setBalances();
+		}
+		String accountUuid = balances.getJSONArray("values").getJSONObject(0).getString("accountId");
+		HttpRequest httpRequest = HttpRequest.newBuilder()
+				.uri(new URI(
+						"%s/banking/v1/accounts/%s/transactions".formatted(url, accountUuid)
+						))
+				.headers(
+						"Accept", "application/json", "Authorization", authorization, "x-http-request-info", requestInfo, "Content-Type", "application/json"
+						)
+				.build();
+		
+		HttpClient httpClient = HttpClient.newHttpClient();
+		HttpResponse<String> httpResponse =  httpClient.send(httpRequest, BodyHandlers.ofString());
+		
+		if(httpResponse.statusCode() != 200)
+			throw new Exception("GET /banking/v1/accounts/{accountId}/transactions returned %s".formatted(httpResponse.statusCode()));
+		
+		JSONObject transactions = new JSONObject(httpResponse.body());
+
+		return transactions;
+	}
 
 }
 

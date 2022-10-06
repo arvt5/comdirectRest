@@ -51,6 +51,7 @@ public class TokenHandling {
         final KeyStore keyStore = TokenHandling.loadKeyStore(fileName, pw);
         // Replace all non Base64 characters.
         key = key.replaceAll("-", "+");
+        key = key.replaceAll("_", "/");
 
 
         // Generate key from string.
@@ -95,7 +96,10 @@ public class TokenHandling {
         SecretKey myKey = kEntry.getSecretKey(); 
 
         // Generate string from key.
-        return Base64.getEncoder().encodeToString(myKey.getEncoded()).replaceAll("\\+", "-");
+        String ret  = Base64.getEncoder().encodeToString(myKey.getEncoded());
+        ret = ret.replaceAll("\\+", "-");
+        ret = ret.replaceAll("/", "_");
+        return ret;
 
     }
 
